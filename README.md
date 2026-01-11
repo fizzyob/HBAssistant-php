@@ -1,2 +1,2 @@
-# -php
+# HBAssistant-php
 用于黄白助手的音乐接口php
