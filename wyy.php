@@ -8,7 +8,7 @@ header('Content-Type: application/json; charset=utf-8');
 header('Access-Control-Allow-Origin: *');
 
 // 配置区域 - 请填入你的网易云音乐Cookie
-$cookie = '你的网易云音乐Cookie';
+$cookie = '';
 
 // 获取歌曲名
 $name = isset($_GET['name']) ? trim($_GET['name']) : '';
@@ -18,10 +18,20 @@ if (empty($name)) {
     exit;
 }
 
-// 搜索歌曲
-$searchUrl = 'https://music.163.com/api/search/get/web?s=' . urlencode($name) . '&type=1&offset=0&limit=1';
-$searchResult = curlPost($searchUrl, '', $cookie);
+// 搜索歌曲（优先使用 cloudsearch，国外/风控环境下 web 搜索接口可能返回加密 result 字符串）
+$searchUrl = 'https://music.163.com/api/cloudsearch/pc?s=' . urlencode($name) . '&type=1&offset=0&limit=1';
+$searchResult = curlGet($searchUrl, $cookie);
 $searchData = json_decode($searchResult, true);
+
+// 兼容：如果 cloudsearch 未返回 songs，则回退旧接口
+if (empty($searchData['result']['songs'][0])) {
+    $fallbackUrl = 'https://music.163.com/api/search/get/web?s=' . urlencode($name) . '&type=1&offset=0&limit=1';
+    $fallbackResult = curlPost($fallbackUrl, '', $cookie);
+    $fallbackData = json_decode($fallbackResult, true);
+    if (!empty($fallbackData['result']['songs'][0])) {
+        $searchData = $fallbackData;
+    }
+}
 
 if (empty($searchData['result']['songs'][0])) {
     echo json_encode(['code' => 404, 'msg' => '未找到歌曲'], JSON_UNESCAPED_UNICODE);
@@ -29,16 +39,53 @@ if (empty($searchData['result']['songs'][0])) {
 }
 
 $song = $searchData['result']['songs'][0];
-$songId = $song['id'];
-$title = $song['name'];
-$singer = implode('/', array_column($song['artists'], 'name'));
-$albumId = $song['album']['id'];
+$songId = $song['id'] ?? 0;
+$title = $song['name'] ?? '';
+
+// cloudsearch: ar/al；旧接口: artists/album
+if (!empty($song['ar'])) {
+    $singer = implode('/', array_column($song['ar'], 'name'));
+} else {
+    $singer = implode('/', array_column($song['artists'] ?? [], 'name'));
+}
+
+$albumId = 0;
+if (!empty($song['al']['id'])) {
+    $albumId = $song['al']['id'];
+} elseif (!empty($song['album']['id'])) {
+    $albumId = $song['album']['id'];
+}
 
 // 封面图
-$cover = 'https://music.163.com/api/album/' . $albumId;
-$albumResult = curlGet($cover, $cookie);
-$albumData = json_decode($albumResult, true);
-$cover = !empty($albumData['album']['picUrl']) ? $albumData['album']['picUrl'] : '';
+$cover = '';
+
+// 优先：用 albumId 再拉一次（兼容旧逻辑）
+if (!empty($albumId)) {
+    $albumApi = 'https://music.163.com/api/album/' . $albumId;
+    $albumResult = curlGet($albumApi, $cookie);
+    $albumData = json_decode($albumResult, true);
+    if (!empty($albumData['album']['picUrl'])) {
+        $cover = $albumData['album']['picUrl'];
+    }
+}
+
+// 回退：直接用搜索结果里的封面字段
+if (empty($cover)) {
+    if (!empty($song['al']['picUrl'])) {
+        $cover = $song['al']['picUrl'];
+    } elseif (!empty($song['album']['picUrl'])) {
+        $cover = $song['album']['picUrl'];
+    }
+}
+
+// 统一 https + 缩略图尺寸（避免部分客户端因图片过大不展示）
+if (!empty($cover)) {
+    if (str_starts_with($cover, 'http://')) {
+        $cover = 'https://' . substr($cover, 7);
+    }
+    // Netease CDN 支持 param=WxH
+    $cover .= (str_contains($cover, '?') ? '&' : '?') . 'param=300y300';
+}
 
 // 歌曲链接
 $link = 'https://music.163.com/#/song?id=' . $songId;
