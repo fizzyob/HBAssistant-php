@@ -8,7 +8,7 @@ header('Content-Type: application/json; charset=utf-8');
 header('Access-Control-Allow-Origin: *');
 
 // 配置区域 - 请填入你的QQ音乐Cookie
-$cookie = '你的QQ音乐Cookie';
+$cookie = '你的cookie';
 
 // 获取歌曲名
 $name = isset($_GET['name']) ? trim($_GET['name']) : '';
